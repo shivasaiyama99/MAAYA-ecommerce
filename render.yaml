@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: sarees-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false # Set in Render Dashboard: mongodb+srv://...
+      - key: CLIENT_URL
+        sync: false # Set to your deployed Vercel domain: https://<your-project>.vercel.app
+      - key: JWT_SECRET
+        generateValue: true # Render will automatically generate a cryptographically strong 256-bit secret
+      - key: ADMIN_EMAIL
+        sync: false # e.g. admin@sareesweb.com
+      - key: ADMIN_PASSWORD_HASH
+        sync: false # Generated via npm run bootstrap:admin
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
