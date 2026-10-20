@@ -44,10 +44,31 @@ export const orderService = {
   },
 
   /**
-   * Admin: Update payment status (e.g. mark COD as Paid)
+   * Admin: Update payment status (e.g. mark as Paid or Pending)
    */
   updateOrderPayment: async (id, paymentStatus) => {
     return await apiClient.patch(`/orders/${id}/payment`, { paymentStatus });
+  },
+
+  /**
+   * Admin: Confirm order after verifying receipt of PhonePe / Google Pay transfer
+   */
+  confirmOrder: async (id, paymentVerified = true, notes = '') => {
+    return await apiClient.post(`/orders/${id}/confirm`, { paymentVerified, notes });
+  },
+
+  /**
+   * Admin: Resend order email notification (confirmation or placement)
+   */
+  resendOrderEmail: async (id, type = 'confirmation') => {
+    return await apiClient.post(`/orders/${id}/resend-email`, { type });
+  },
+
+  /**
+   * Fetch store UPI and payment transfer configuration
+   */
+  getPaymentConfig: async () => {
+    return await apiClient.get('/orders/payment-config');
   },
 };
 

@@ -11,11 +11,21 @@ export const apiClient = axios.create({
   timeout: 45000, // 45s to accommodate Render free-tier cold starts gracefully
 });
 
-// Request Interceptor: Attach JWT Token if available in localStorage
+// Helper: Retrieve active auth token from sessionStorage (admin/ephemeral) or localStorage (customer)
+export const getAuthToken = () => {
+  try {
+    return sessionStorage.getItem('token') || localStorage.getItem('token') || null;
+  } catch {
+    return null;
+  }
+};
+
+// Request Interceptor: Attach JWT Token if available in sessionStorage or localStorage
 apiClient.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    const token = getAuthToken();
     if (token) {
+      config.headers = config.headers || {};
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;

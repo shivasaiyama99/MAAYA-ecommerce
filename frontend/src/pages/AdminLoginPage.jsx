@@ -35,10 +35,15 @@ export const AdminLoginPage = () => {
 
     try {
       const response = await authService.adminLogin(formData);
-      if (response.success && response.data) {
+      const user = response?.data?.user || response?.user;
+      const token = response?.data?.token || response?.token;
+
+      if (response?.success && user && token) {
         // Log in with isAdmin = true, isolating token in sessionStorage
-        login(response.data.user, response.data.token, true);
+        login(user, token, true);
         navigate('/admin/dashboard', { replace: true });
+      } else {
+        setError('Login succeeded but invalid administrative session payload received.');
       }
     } catch (err) {
       setError(

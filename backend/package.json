@@ -8,11 +8,13 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "bootstrap:admin": "node scripts/bootstrapAdmin.js",
-    "test": "node scripts/testAuth.js && node scripts/testProducts.js && node scripts/testStorefrontFlow.js && node scripts/testOrderSystem.js",
+    "test": "node scripts/testAuth.js && node scripts/testProducts.js && node scripts/testStorefrontFlow.js && node scripts/testOrderSystem.js && node scripts/testAdminAuthFix.js && node scripts/testUpiEmailWorkflow.js",
     "test:auth": "node scripts/testAuth.js",
+    "test:admin-auth": "node scripts/testAdminAuthFix.js",
     "test:products": "node scripts/testProducts.js",
     "test:flow": "node scripts/testStorefrontFlow.js",
     "test:orders": "node scripts/testOrderSystem.js",
+    "test:upi-workflow": "node scripts/testUpiEmailWorkflow.js",
     "seed:products": "node scripts/seedProducts.js"
   },
   "dependencies": {

@@ -97,8 +97,10 @@ const orderSchema = new mongoose.Schema(
     },
     customerEmail: {
       type: String,
+      required: [true, 'Customer email is required for order updates'],
       lowercase: true,
       trim: true,
+      match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Please provide a valid customer email address'],
     },
     items: {
       type: [orderItemSchema],
@@ -126,8 +128,8 @@ const orderSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ['COD', 'UPI', 'Card'],
-      default: 'COD',
+      enum: ['UPI', 'PhonePe / Google Pay', 'COD', 'Card'],
+      default: 'PhonePe / Google Pay',
     },
     paymentStatus: {
       type: String,
@@ -138,6 +140,48 @@ const orderSchema = new mongoose.Schema(
       type: String,
       enum: ['Placed', 'Confirmed', 'Shipped', 'Delivered', 'Cancelled'],
       default: 'Placed',
+    },
+    paymentVerified: {
+      type: Boolean,
+      default: false,
+    },
+    paymentVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+    confirmedAt: {
+      type: Date,
+      default: null,
+    },
+    confirmedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    adminNotes: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    placementEmailSent: {
+      type: Boolean,
+      default: false,
+    },
+    placementEmailError: {
+      type: String,
+      default: null,
+    },
+    confirmationEmailSent: {
+      type: Boolean,
+      default: false,
+    },
+    confirmationEmailSentAt: {
+      type: Date,
+      default: null,
+    },
+    confirmationEmailError: {
+      type: String,
+      default: null,
     },
   },
   {

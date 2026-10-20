@@ -4,7 +4,8 @@ import Product from '../models/productModel.js';
 import Cart from '../models/cartModel.js';
 import { ApiResponse } from '../utils/apiResponse.js';
 import { decrementDevProductStock, getDevProductById } from './productController.js';
-import EmailService from '../services/emailService.js';
+import EmailService, { isEmailConfigured } from '../services/emailService.js';
+import { config } from '../config/env.js';
 
 // In-memory dev orders storage fallback
 const devOrders = [];
@@ -36,11 +37,25 @@ export const createOrder = async (req, res) => {
     const {
       items: rawItems,
       shippingAddress,
-      paymentMethod = 'COD',
+      paymentMethod,
+      customerEmail: rawEmail,
       idempotencyKey,
       isBuyNow = false,
       fromCart = false,
     } = req.body;
+
+    // Validate customer email for order updates
+    const customerEmail = (rawEmail || shippingAddress?.email || req.user?.email || '')
+      .trim()
+      .toLowerCase();
+
+    if (!customerEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)) {
+      return ApiResponse.error(
+        res,
+        'A valid customer email address is required to receive order status updates.',
+        400
+      );
+    }
 
     // Validate shipping address
     if (
@@ -63,11 +78,23 @@ export const createOrder = async (req, res) => {
       return ApiResponse.error(res, 'Order must contain at least one saree.', 400);
     }
 
+    // Always enforce manual PhonePe / Google Pay UPI transfer
+    const chosenPaymentMethod = 'PhonePe / Google Pay';
+
     // Check for duplicate submission via idempotencyKey
-    if (idempotencyKey && isDbActive()) {
-      const existing = await Order.findOne({ idempotencyKey, user: req.userId });
-      if (existing) {
-        return ApiResponse.success(res, existing, 'Order retrieved (duplicate submission prevented)', 200);
+    if (idempotencyKey) {
+      if (isDbActive()) {
+        const existing = await Order.findOne({ idempotencyKey, user: req.userId });
+        if (existing) {
+          return ApiResponse.success(res, existing, 'Order retrieved (duplicate submission prevented)', 200);
+        }
+      } else {
+        const devExisting = devOrders.find(
+          (o) => o.idempotencyKey === idempotencyKey && o.user?.toString() === req.userId?.toString()
+        );
+        if (devExisting) {
+          return ApiResponse.success(res, devExisting, 'Order retrieved (duplicate submission prevented)', 200);
+        }
       }
     }
 
@@ -166,7 +193,7 @@ export const createOrder = async (req, res) => {
               orderNumber,
               idempotencyKey: idempotencyKey || null,
               user: req.userId,
-              customerEmail: req.user?.email || '',
+              customerEmail,
               items: verifiedOrderItems,
               shippingAddress: {
                 fullName: shippingAddress.fullName.trim(),
@@ -180,9 +207,10 @@ export const createOrder = async (req, res) => {
               subtotal: calculatedSubtotal,
               shippingFee,
               totalAmount,
-              paymentMethod: paymentMethod === 'COD' ? 'COD' : paymentMethod,
-              paymentStatus: 'Pending', // COD orders must remain Pending until collected
+              paymentMethod: chosenPaymentMethod,
+              paymentStatus: 'Pending',
               orderStatus: 'Placed',
+              paymentVerified: false,
             },
           ],
           { session }
@@ -200,9 +228,23 @@ export const createOrder = async (req, res) => {
         }
       });
 
-      // Send email alert to store owner (komakulakiranmai@gmail.com)
-      EmailService.sendOrderNotification(createdOrder).catch((err) => {
-        console.warn('Order notification email failed:', err.message);
+      // Send order placement notifications to Admin and Customer asynchronously
+      Promise.allSettled([
+        EmailService.sendAdminOrderNotification(createdOrder),
+        EmailService.sendCustomerOrderPlacementEmail(createdOrder),
+      ]).then(async ([adminResult, custResult]) => {
+        const isCustSuccess = custResult.status === 'fulfilled' && custResult.value?.success;
+        const custErr =
+          custResult.status === 'rejected'
+            ? custResult.reason?.message
+            : custResult.value?.error || null;
+
+        if (isDbActive()) {
+          await Order.findByIdAndUpdate(createdOrder._id, {
+            placementEmailSent: isCustSuccess,
+            placementEmailError: custErr,
+          }).catch(() => null);
+        }
       });
 
       return ApiResponse.success(res, createdOrder, 'Order placed successfully', 201);
@@ -276,7 +318,7 @@ export const createOrder = async (req, res) => {
           orderNumber,
           idempotencyKey: idempotencyKey || null,
           user: req.userId,
-          customerEmail: req.user?.email || '',
+          customerEmail,
           items: verifiedOrderItems,
           shippingAddress: {
             fullName: shippingAddress.fullName.trim(),
@@ -290,9 +332,10 @@ export const createOrder = async (req, res) => {
           subtotal: calculatedSubtotal,
           shippingFee,
           totalAmount,
-          paymentMethod: paymentMethod === 'COD' ? 'COD' : paymentMethod,
+          paymentMethod: chosenPaymentMethod,
           paymentStatus: 'Pending',
           orderStatus: 'Placed',
+          paymentVerified: false,
         });
 
         // Clear cart only after successful order creation
@@ -300,9 +343,23 @@ export const createOrder = async (req, res) => {
           await Cart.findOneAndUpdate({ user: req.userId }, { $set: { items: [] } });
         }
 
-        // Send email alert to store owner (komakulakiranmai@gmail.com)
-        EmailService.sendOrderNotification(newOrder).catch((err) => {
-          console.warn('Order notification email failed:', err.message);
+        // Send order placement notifications to Admin and Customer asynchronously
+        Promise.allSettled([
+          EmailService.sendAdminOrderNotification(newOrder),
+          EmailService.sendCustomerOrderPlacementEmail(newOrder),
+        ]).then(async ([adminResult, custResult]) => {
+          const isCustSuccess = custResult.status === 'fulfilled' && custResult.value?.success;
+          const custErr =
+            custResult.status === 'rejected'
+              ? custResult.reason?.message
+              : custResult.value?.error || null;
+
+          if (isDbActive()) {
+            await Order.findByIdAndUpdate(newOrder._id, {
+              placementEmailSent: isCustSuccess,
+              placementEmailError: custErr,
+            }).catch(() => null);
+          }
         });
 
         return ApiResponse.success(res, newOrder, 'Order placed successfully', 201);
@@ -365,24 +422,27 @@ export const createOrder = async (req, res) => {
     const devNewOrder = {
       _id: new mongoose.Types.ObjectId().toString(),
       orderNumber,
+      idempotencyKey: idempotencyKey || null,
       user: req.userId,
-      customerEmail: req.user?.email || 'customer@sareesweb.com',
+      customerEmail,
       items: verifiedOrderItems,
       shippingAddress,
       subtotal: calculatedSubtotal,
       shippingFee: 0,
       totalAmount: calculatedSubtotal,
-      paymentMethod,
+      paymentMethod: chosenPaymentMethod,
       paymentStatus: 'Pending',
       orderStatus: 'Placed',
+      paymentVerified: false,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
     devOrders.unshift(devNewOrder);
 
-    // Send email alert to store owner in dev/fallback mode
-    EmailService.sendOrderNotification(devNewOrder).catch(() => {});
+    // Send email alert in dev/fallback mode
+    EmailService.sendAdminOrderNotification(devNewOrder).catch(() => {});
+    EmailService.sendCustomerOrderPlacementEmail(devNewOrder).catch(() => {});
 
     return ApiResponse.success(res, devNewOrder, 'Order placed successfully (dev mode)', 201);
   } catch (error) {
@@ -701,10 +761,25 @@ export const updateOrderStatus = async (req, res) => {
 
       order.orderStatus = status;
 
-      // If explicitly delivered and COD, payment can also be marked as Paid
-      if (paymentStatus && ['Pending', 'Paid'].includes(paymentStatus)) {
+      // If transitioning to Confirmed, also mark payment as Paid/Verified and dispatch confirmation email
+      if (status === 'Confirmed') {
+        order.paymentStatus = 'Paid';
+        order.paymentVerified = true;
+        order.paymentVerifiedAt = order.paymentVerifiedAt || new Date();
+        order.confirmedAt = order.confirmedAt || new Date();
+
+        const emailResult = await EmailService.sendCustomerOrderConfirmationEmail(order);
+        if (emailResult && emailResult.success) {
+          order.confirmationEmailSent = true;
+          order.confirmationEmailSentAt = new Date();
+          order.confirmationEmailError = null;
+        } else {
+          order.confirmationEmailSent = false;
+          order.confirmationEmailError = emailResult?.error || 'Failed to dispatch confirmation email';
+        }
+      } else if (paymentStatus && ['Pending', 'Paid'].includes(paymentStatus)) {
         order.paymentStatus = paymentStatus;
-      } else if (status === 'Delivered' && order.paymentMethod === 'COD' && req.body.markPaid) {
+      } else if (status === 'Delivered' && req.body.markPaid) {
         order.paymentStatus = 'Paid';
       }
 
@@ -744,7 +819,7 @@ export const updateOrderStatus = async (req, res) => {
     devOrder.orderStatus = status;
     if (paymentStatus && ['Pending', 'Paid'].includes(paymentStatus)) {
       devOrder.paymentStatus = paymentStatus;
-    } else if (status === 'Delivered' && devOrder.paymentMethod === 'COD' && req.body.markPaid) {
+    } else if (status === 'Delivered' && req.body.markPaid) {
       devOrder.paymentStatus = 'Paid';
     }
 
@@ -801,6 +876,177 @@ export const updateOrderPayment = async (req, res) => {
   }
 };
 
+/**
+ * @route   POST /api/orders/:id/confirm
+ * @desc    Confirm order after verifying receipt of PhonePe / Google Pay transfer (Admin Only)
+ * @access  Admin
+ */
+export const confirmOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { paymentVerified, notes } = req.body;
+
+    if (paymentVerified !== true) {
+      return ApiResponse.error(
+        res,
+        'Payment verification required: administrator must explicitly confirm that payment was received via PhonePe / Google Pay.',
+        400
+      );
+    }
+
+    let order = null;
+    if (isDbActive()) {
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        order = await Order.findById(id);
+      }
+      if (!order) {
+        order = await Order.findOne({ orderNumber: id });
+      }
+    } else {
+      order = devOrders.find((o) => o._id?.toString() === id || o.orderNumber === id);
+    }
+
+    if (!order) {
+      return ApiResponse.error(res, 'Order not found.', 404);
+    }
+
+    if (order.orderStatus === 'Cancelled') {
+      return ApiResponse.error(res, 'Cannot confirm a cancelled order.', 400);
+    }
+
+    // Check if already confirmed to prevent duplicate processing
+    if (order.orderStatus === 'Confirmed' && order.paymentStatus === 'Paid') {
+      return ApiResponse.error(
+        res,
+        'This order has already been verified and confirmed. To resend notification, use the resend-email action.',
+        400
+      );
+    }
+
+    order.orderStatus = 'Confirmed';
+    order.paymentStatus = 'Paid';
+    order.paymentVerified = true;
+    order.paymentVerifiedAt = order.paymentVerifiedAt || new Date();
+    order.confirmedAt = order.confirmedAt || new Date();
+    order.confirmedBy = req.userId || 'admin';
+    if (notes && typeof notes === 'string') {
+      order.adminNotes = notes.trim();
+    }
+
+    if (isDbActive()) {
+      await order.save();
+    }
+
+    // Dispatch confirmation email
+    const emailResult = await EmailService.sendCustomerOrderConfirmationEmail(order);
+    if (emailResult && emailResult.success) {
+      order.confirmationEmailSent = true;
+      order.confirmationEmailSentAt = new Date();
+      order.confirmationEmailError = null;
+    } else {
+      order.confirmationEmailSent = false;
+      order.confirmationEmailError = emailResult?.error || 'Failed to dispatch confirmation email';
+    }
+
+    if (isDbActive()) {
+      await order.save();
+    }
+
+    return ApiResponse.success(
+      res,
+      order,
+      order.confirmationEmailSent
+        ? 'Order confirmed and confirmation email sent to customer.'
+        : `Order confirmed. Email notification error: ${order.confirmationEmailError || 'pending retry'}`
+    );
+  } catch (error) {
+    console.error('confirmOrder error:', error);
+    return ApiResponse.error(res, error.message || 'Failed to confirm order.', 500);
+  }
+};
+
+/**
+ * @route   POST /api/orders/:id/resend-email
+ * @desc    Resend confirmation or placement email (Admin Only)
+ * @access  Admin
+ */
+export const resendOrderEmail = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type = 'confirmation' } = req.body;
+
+    let order = null;
+    if (isDbActive()) {
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        order = await Order.findById(id);
+      }
+      if (!order) {
+        order = await Order.findOne({ orderNumber: id });
+      }
+    } else {
+      order = devOrders.find((o) => o._id?.toString() === id || o.orderNumber === id);
+    }
+
+    if (!order) {
+      return ApiResponse.error(res, 'Order not found.', 404);
+    }
+
+    let emailResult;
+    if (type === 'confirmation') {
+      emailResult = await EmailService.sendCustomerOrderConfirmationEmail(order);
+      if (emailResult && emailResult.success) {
+        order.confirmationEmailSent = true;
+        order.confirmationEmailSentAt = new Date();
+        order.confirmationEmailError = null;
+      } else {
+        order.confirmationEmailError = emailResult?.error || 'Failed to dispatch confirmation email';
+      }
+    } else {
+      emailResult = await EmailService.sendCustomerOrderPlacementEmail(order);
+      if (emailResult && emailResult.success) {
+        order.placementEmailSent = true;
+        order.placementEmailError = null;
+      } else {
+        order.placementEmailError = emailResult?.error || 'Failed to dispatch placement email';
+      }
+    }
+
+    if (isDbActive()) {
+      await order.save();
+    }
+
+    return ApiResponse.success(
+      res,
+      order,
+      emailResult?.success
+        ? 'Email notification resent successfully.'
+        : `Email retry recorded: ${emailResult?.error || 'delivery failed'}`
+    );
+  } catch (error) {
+    console.error('resendOrderEmail error:', error);
+    return ApiResponse.error(res, error.message || 'Failed to resend order email.', 500);
+  }
+};
+
+/**
+ * @route   GET /api/orders/payment-config
+ * @desc    Get store UPI and payment transfer configuration
+ * @access  Public
+ */
+export const getPaymentConfig = async (req, res) => {
+  return ApiResponse.success(res, {
+    paymentMethod: 'Transfer via PhonePe / Google Pay',
+    upiId: config.payment.upiId,
+    upiName: config.payment.upiName,
+    upiQrUrl: config.payment.upiQrUrl,
+    supportEmail: config.store.supportEmail,
+    supportAddress: config.store.supportAddress,
+    supportPhone: config.store.supportPhone,
+    emailConfigured: isEmailConfigured(),
+    emailUser: process.env.EMAIL_USER || config.email.user || '',
+  });
+};
+
 export default {
   createOrder,
   getMyOrders,
@@ -809,4 +1055,7 @@ export default {
   getAdminOrders,
   updateOrderStatus,
   updateOrderPayment,
+  confirmOrder,
+  resendOrderEmail,
+  getPaymentConfig,
 };

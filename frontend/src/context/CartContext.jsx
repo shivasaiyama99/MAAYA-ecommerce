@@ -69,7 +69,7 @@ export const CartProvider = ({ children }) => {
         guestItems = [];
       }
 
-      if (guestItems.length > 0) {
+      if (guestItems.length > 0 && user?.role === 'customer') {
         // Reconcile / Merge guest items into MongoDB user cart without duplication
         const payload = guestItems.map((item) => ({
           productId: item.product?._id || item.product,
@@ -90,7 +90,7 @@ export const CartProvider = ({ children }) => {
     } finally {
       setCartLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?.role]);
 
   // Sync on login / user change
   useEffect(() => {

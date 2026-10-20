@@ -38,7 +38,19 @@ export const config = {
   email: {
     user: process.env.EMAIL_USER || '',
     pass: process.env.EMAIL_PASS || '',
-    notificationRecipient: process.env.STORE_NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || '',
+    notificationRecipient: process.env.STORE_NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || 'komakulakiranmai@gmail.com',
+  },
+  payment: {
+    upiId: process.env.STORE_UPI_ID || '',
+    upiName: process.env.STORE_UPI_NAME || 'MAAYA Collections',
+    upiQrUrl: process.env.STORE_UPI_QR_URL || '',
+  },
+  store: {
+    name: 'MAAYA Collections',
+    tagline: 'Sarees & Royal Jewellery',
+    supportEmail: 'komakulakiranmai@gmail.com',
+    supportAddress: 'H.no:4-6-158/31A, Durga Nagar, Nacharam, Rangareddy. Pincode 500076',
+    supportPhone: '+91 97016 07651',
   },
 };
 

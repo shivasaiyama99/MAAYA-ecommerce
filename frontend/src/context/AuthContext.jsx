@@ -4,7 +4,14 @@ import authService from '../services/authService';
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try {
+      const storedUser = sessionStorage.getItem('user') || localStorage.getItem('user');
+      return storedUser ? JSON.parse(storedUser) : null;
+    } catch {
+      return null;
+    }
+  });
   const [token, setToken] = useState(() => {
     // Check sessionStorage first (used for admin / ephemeral sessions), then localStorage
     return sessionStorage.getItem('token') || localStorage.getItem('token');
@@ -27,6 +34,15 @@ export const AuthProvider = ({ children }) => {
         if (response.success && response.data?.user) {
           setUser(response.data.user);
           setToken(activeToken);
+          try {
+            if (sessionStorage.getItem('token')) {
+              sessionStorage.setItem('user', JSON.stringify(response.data.user));
+            } else {
+              localStorage.setItem('user', JSON.stringify(response.data.user));
+            }
+          } catch {
+            // Ignore non-fatal storage errors
+          }
         } else {
           throw new Error('Invalid session');
         }
@@ -47,9 +63,6 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = (userData, authToken, isAdmin = false) => {
-    setUser(userData);
-    setToken(authToken);
-
     if (isAdmin) {
       // Secure admin session in sessionStorage only (ephemeral session, cleared on tab close)
       // Never store admin session or any credentials in localStorage
@@ -64,6 +77,9 @@ export const AuthProvider = ({ children }) => {
       sessionStorage.removeItem('token');
       sessionStorage.removeItem('user');
     }
+
+    setUser(userData);
+    setToken(authToken);
   };
 
   const logout = async () => {

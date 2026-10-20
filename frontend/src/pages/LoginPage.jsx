@@ -38,9 +38,14 @@ export const LoginPage = () => {
 
     try {
       const response = await authService.login(formData);
-      if (response.success && response.data) {
-        login(response.data.user, response.data.token, false);
+      const user = response?.data?.user || response?.user;
+      const token = response?.data?.token || response?.token;
+
+      if (response?.success && user && token) {
+        login(user, token, false);
         navigate(from, { replace: true });
+      } else {
+        setError('Login succeeded but invalid customer session payload received.');
       }
     } catch (err) {
       setError(err.message || 'Invalid email or password.');
